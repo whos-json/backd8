@@ -79,7 +79,7 @@ Check (Throws { Set-CommitEdits $r @{ 'deadbeef' = @{ message = 'x' } } } '*Unkn
 Check (Throws { Set-CommitEdits $r @{} } '*Nothing*') 'empty edit set rejected'
 git -C $r checkout -q -b unmerged; Commit $r 'only on unmerged' '2021-01-10T10:00:00'; $sideSha = G $r @('rev-parse', 'HEAD'); git -C $r checkout -q main
 Check (Throws { Set-CommitEdits $r @{ $sideSha = @{ message = 'x' } } } '*') 'commit not on current branch history handled'
-Check ((Bd reword $r HEAD 'cli reworded') -match 'Rewrote 1' -and (Get-CommitList $r 1)[0].Subject -eq 'cli reworded') 'CLI reword'
+Check ((Bd reword $r HEAD 'cli reworded') -match 'Changed 1 commit' -and (Get-CommitList $r 1)[0].Subject -eq 'cli reworded') 'CLI reword'
 Check ((Bd redate $r HEAD 'not a date') -match 'Invalid') 'CLI redate rejects bad date'
 $null = Bd undo $r; $null = Bd undo $r
 
@@ -111,7 +111,7 @@ Check ((Get-PushState $r).Ahead -eq 0 -and (Get-PushState $r).Behind -eq 0) 'in 
 $null = Set-CommitEdits $r @{ ($all | ? Subject -eq 'c3 third').Sha = @{ message = 'c3 reworded' } }
 $st = Get-PushState $r
 Check ($st.Ahead -eq 5 -and $st.Behind -eq 5) "diverged detected after rewrite (ahead $($st.Ahead) behind $($st.Behind))"
-Check (Throws { Push-Repo $r } '*use force push*') 'normal push blocked after rewrite, tells user about force'
+Check (Throws { Push-Repo $r } '*Replace GitHub*') 'normal push blocked after rewrite, tells user about force'
 $remoteBefore = G $bare @('rev-parse', 'main')
 $o = Push-Repo $r -Force
 Check ((G $bare @('rev-parse', 'main')) -eq (G $r @('rev-parse', 'HEAD')) -and (G $bare @('rev-parse', 'main')) -ne $remoteBefore) 'force push replaced remote history'
@@ -206,7 +206,7 @@ Commit $cl 'p1' '2021-01-01T10:00:00'; Commit $cl 'p2' '2021-01-02T10:00:00'; Co
 git -C $cl tag v1 HEAD~1; git -C $cl tag -a v2 -m ann HEAD~1; git -C $cl branch side HEAD~1
 $short = (G $cl @('rev-parse', '--short=7', 'HEAD~1')).ToUpper()
 $o = Bd reword $cl $short 'He said "hi" & left'
-Check ($o -match 'Reworded: \w+ p2\s+->\s+He said' -and $o -match 'Rewrote 2 commit' -and $o -match 'later commit' -and $o -match 'Undo with') 'uppercase sha accepted; reword output names old->new, descendants, undo'
+Check ($o -match 'Reworded: \w+ p2\s+->\s+He said' -and $o -match 'Changed 1 commit' -and $o -match 'later commit' -and $o -match 'backdate undo') 'uppercase sha accepted; reword output names old->new, descendants, undo'
 Check ($o -match 'still point at the OLD commits' -and $o -match 'v1' -and $o -match 'v2' -and $o -match 'side') 'tags/branches left on old commits are reported'
 $null = Bd undo $cl
 $mf = "$T\msg.txt"; [IO.File]::WriteAllText($mf, "-leading dash`n`nsecond ""quoted"" line`n", (New-Object Text.UTF8Encoding $false))
@@ -490,7 +490,7 @@ git -C $sec remote add origin 'https://localhost:1/x/y.git'; git -C $sec branch 
 $thr = Throws { Connect-GitHub $sec } '*unusual remote or branch name*'
 Check ($thr -and -not (Test-Path "$sec\PWN")) 'sign-in refuses a hostile branch name instead of building a command line'
 git -C $sec checkout -q main
-git -C $sec config 'branch.main.merge' 'refs/heads/m & echo PWNED> pwn.txt & rem '
+git -C $sec config 'branch.main.remote' 'origin'; git -C $sec config 'branch.main.merge' 'refs/heads/m & echo PWNED> pwn.txt & rem '
 Check ((Throws { Connect-GitHub $sec } '*unusual remote or branch name*') -and -not (Test-Path "$sec\pwn.txt") -and -not (Test-Path "$PWD\pwn.txt")) 'a hostile branch.<b>.merge setting cannot inject a command'
 git -C $sec config --unset 'branch.main.merge'
 # hostile repo config

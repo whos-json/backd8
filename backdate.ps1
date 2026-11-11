@@ -39,12 +39,12 @@ function Assert-NoRisky([string]$folder, [switch]$ok) {
 function Show-Usage { foreach ($l in (Get-Content -LiteralPath $PSCommandPath)) { if ($l -notmatch '^#') { break }; $l -replace '^# ?', '' } }
 function Show-Rewrite($r, [string]$repoArg, [string]$what) {
   $what
-  "Rewrote $($r.Rewritten) commit(s): the $($r.Edited) edited one(s) plus $($r.Rewritten - $r.Edited) later commit(s) that got new hashes. New HEAD $($r.NewHead.Substring(0, 7))."
-  "Backup: $($r.Backup)   Undo with: backdate undo `"$repoArg`""
+  "Done. Changed $($r.Edited) commit(s)$(if ($r.Rewritten -gt $r.Edited) { ", and $($r.Rewritten - $r.Edited) later commit(s) were re-saved with new IDs" }). To go back: backdate undo `"$repoArg`""
+  foreach ($w in @($r.Warnings)) { if ($w) { "Warning: $w" } }
   if ($r.SignaturesDropped) { "Warning: $($r.SignaturesDropped) rewritten commit(s) were signed; the signatures could not be kept." }
   if (@($r.StaleRefs).Count) { "Note: these still point at the OLD commits: $(@($r.StaleRefs) -join ', ')" }
   $ps = try { Get-PushState $repoArg } catch { $null }
-  if ($ps -and $ps.Url -and $null -ne $ps.Behind -and $ps.Behind -gt 0) { "This branch is on $($ps.Url); publishing the change needs a force push: backdate push `"$repoArg`" -Force" }
+  if ($ps -and $ps.Url -and $null -ne $ps.Behind -and $ps.Behind -gt 0) { "These commits are already on GitHub. To publish the change: backdate push `"$repoArg`" -Force   (GitHub's old version is replaced)" }
 }
 function Show-Access($a) {
   if (-not $a.GitInstalled) { return $a.Detail }
@@ -101,7 +101,7 @@ try {
     'publish'   {
       $folder = Need $Arg1 '<folder>'
       if (@(Get-WorkingChanges $folder).Count) {
-        $msg = Read-MessageText $MessageFile $Arg2 '<message> (or -MessageFile <file>)'
+        $msg = if (-not $MessageFile -and -not $Arg2) { $n = @(Get-WorkingChanges $folder).Count; "Update $n file$(if ($n -ne 1) { 's' })" } else { Read-MessageText $MessageFile $Arg2 '<message> (or -MessageFile <file>)' }
         Assert-NoRisky $folder -ok:$IncludeRisky
         $nc = @{ Message = $msg; All = $true; AllowRisky = [bool]$IncludeRisky }; if ($Date) { $nc.Date = Parse-Date $Date }
         Invoke-Publish $folder -NewCommit $nc -Push -Force:$Force -DiscardRemote:$DiscardRemote
@@ -112,8 +112,9 @@ try {
     'account'   { $f = Need $Arg1 '<folder>'; if ($Arg2) { Set-GitHubAccount $f $Arg2 } else { $ps = Get-PushState $f; $ra = Resolve-GitHubAccount (Get-RepoRoot $f) $ps.Url; "Saved GitHub accounts: $((@(Get-GitHubAccounts)) -join ', ')"; "This project uses: $(if ($ra) { $ra.Name + ' (' + $ra.Source + ')' } else { '(not decided)' })" } }
     'trust'     { Set-RepoTrusted (Need $Arg1 '<folder>') }
     'state'     {
-      $pl = Get-WorkflowPlan (Need $Arg1 '<folder>') -CheckAccess:$Online
+      $pl = Get-WorkflowPlan (Need $Arg1 '<folder>') -CheckAccess:$Online -Fetch:$Online
       "State:        $($pl.State) - $($pl.Title)"; "What it means: $($pl.Help)"
+      if (-not $Online -and $pl.Facts.Linked) { 'Note:         based on what this PC last saw of GitHub; add -Online to look at GitHub now.' }
       $f = $pl.Facts; "Facts:        changes=$($f.Changes) ahead=$($f.Ahead) behind=$($f.Behind) foreign=$($f.RemoteOnly)/$($f.Others) linked=$($f.Linked) access=$($f.Access)"
       foreach ($a in $pl.Actions) { '  [{0}] {1}{2}' -f $(if ($a.Enabled) { 'x' } else { ' ' }), $a.Label, $(if (-not $a.Enabled -and $a.Why) { '   (' + $a.Why + ')' }) }
       "Next step:    $($pl.Recommended)"

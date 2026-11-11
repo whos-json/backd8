@@ -83,13 +83,13 @@ try {
   $c = @(Get-CommitList $pf 50) | Sort-Object Date
   $s4 = ($c | Where-Object Subject -eq 'feature 4').Sha; $s8 = ($c | Where-Object Subject -eq 'feature 8').Sha
   $o = Bd reword $pf $s4.Substring(0, 8) 'feature 4: polished wording'
-  Check ($o -match 'Reworded' -and $o -match 'force push') 'reword explains it needs a force push'
+  Check ($o -match 'Reworded' -and $o -match 'push .* -Force') 'reword explains it needs a force push'
   $s8 = (@(Get-CommitList $pf 50) | Where-Object Subject -eq 'feature 8').Sha   # hash changed: it descends from the reworded commit
   $o = Bd redate $pf $s8.Substring(0, 8) '2023-03-02T10:30:00'
   Check ($o -match 'Redated') 'redate'
   $st = Get-PushState $pf
   Check ($st.Ahead -gt 0 -and $st.Behind -gt 0) "state: diverged (ahead $($st.Ahead) / behind $($st.Behind))"
-  Check ((Bd push $pf) -match 'use force push') 'plain push refused after the edit'
+  Check ((Bd push $pf) -match 'Replace GitHub') 'plain push refused after the edit'
   $o = Bd push $pf -Force
   Check ($o -match 'Pushed main') 'force push (lease) succeeds'
   Check ((G "$root\me\portfolio.git" @('rev-parse', 'main')) -eq (G $pf @('rev-parse', 'HEAD'))) 'server history = edited local history'

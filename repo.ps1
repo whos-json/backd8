@@ -333,15 +333,21 @@ function Get-PushState([string]$Path) {
       $lr = Git-Out $repo @('rev-list', '--left-right', '--count', "HEAD...$track")
       if (-not $lr.Code -and $lr.Out -and $lr.Out[0] -match '^(\d+)\s+(\d+)') { $ahead = [int]$Matches[1]; $behind = [int]$Matches[2] }
       # commits on the remote that exist in no local branch, tag or backup: force pushing would destroy them
-      $ro = Git-Out $repo @('rev-list', '--count', $track, '--not', '--branches', '--tags', '--glob=refs/backd8/*')
-      if (-not $ro.Code -and $ro.Out -and $ro.Out[0] -match '^\d+$') { $remoteOnly = [int]$ro.Out[0] }
+      # remote commits whose CHANGE already exists in our history under a new hash (a teammate's commit we replayed with sync) are not lost by replacing
+      $equiv = @{}
+      $cy = Git-Out $repo @('cherry', 'HEAD', $track)
+      if (-not $cy.Code) { foreach ($cl in $cy.Out) { if ($cl -match '^- ([0-9a-f]{40})') { $equiv[$Matches[1]] = $true } } }
+      $ro = Git-Out $repo @('rev-list', $track, '--not', '--branches', '--tags', '--glob=refs/backd8/*')
+      if (-not $ro.Code) { $remoteOnly = @($ro.Out | Where-Object { $_ -match '^[0-9a-f]{40}$' -and -not $equiv.ContainsKey($_) }).Count }
     }
   }
-  $others = 0                                                  # commits a force push would remove from GitHub that were written by someone else
+  $others = 0; if (-not $equiv) { $equiv = @{} }             # commits a force push would remove from GitHub that were written by someone else
   if ($track) {
     $me = (Get-GitIdentity $repo).Email
-    $em = Git-Out $repo @('log', '-n', '2000', '--format=%ae', $track, '--not', 'HEAD')
-    if (-not $em.Code) { $others = @($em.Out | Where-Object { $_ -and $_ -ine $me }).Count }
+    $em = Git-Out $repo @('log', '-n', '2000', '--format=%H|%ae|%at|%s', $track, '--not', 'HEAD')
+    $mine = @{}   # same author, time and subject as something we have: a replayed copy; a REWORDED commit of someone else is not
+    if ($equiv.Count) { $lc = Git-Out $repo @('log', '-n', '2000', '--format=%ae|%at|%s', 'HEAD'); if (-not $lc.Code) { foreach ($l in $lc.Out) { $mine[$l] = $true } } }
+    if (-not $em.Code) { $others = @($em.Out | Where-Object { $_ -match '^([0-9a-f]{40})\|([^|]*)\|(\d+)\|(.*)$' -and $Matches[2] -ine $me -and -not ($equiv.ContainsKey($Matches[1]) -and $mine.ContainsKey("$($Matches[2])|$($Matches[3])|$($Matches[4])")) }).Count }
   }
   [pscustomobject]@{ Repo = $repo; Branch = $branch; Remote = $remote; DestRef = $destRef; Url = $url; Upstream = $upstream; Ahead = $ahead; Behind = $behind; TrackingSha = $track; RemoteOnly = $remoteOnly; OthersCommits = $others }
 }
@@ -356,7 +362,7 @@ function Push-Repo([string]$Path, [switch]$Force, [switch]$DiscardRemote) {
     throw "GitHub has $($s.Behind) newer change(s) that your project does not have yet (made on another computer or on github.com). Get them first (backdate sync `"$($s.Repo)`"), then publish again."
   }
   if (-not $Force -and $s.Behind -gt 0) {
-    throw "Your project and GitHub have both changed (ahead $($s.Ahead), behind $($s.Behind)). If you edited commits that were already published, use force push to replace GitHub's version; if someone else added work, get it first (backdate sync `"$($s.Repo)`")."
+    throw "Your project has $($s.Ahead) change(s) that GitHub does not have, and GitHub has $($s.Behind) that your project does not. If you edited commits that were already published, publish with 'Replace GitHub's version' (command line: backdate push <folder> -Force); if someone else added work, get the latest from GitHub first (command line: backdate sync <folder>)."
   }
   if ($Force -and $s.OthersCommits -gt 0 -and $s.RemoteOnly -eq 0 -and -not $DiscardRemote) {
     throw "Replacing GitHub's version would remove $($s.OthersCommits) commit(s) written by someone else (not your git identity). Make sure that is what you want: command line  backdate push <folder> -Force -DiscardRemote ; window: the second confirmation."
@@ -567,7 +573,7 @@ function Get-RemoteUrlProblem([string]$Url) {
   if (-not $u) { return 'Paste the address of your GitHub repository, for example https://github.com/<you>/<repo>.git' }
   $shape = ($u -notmatch '^-') -and ($u -match '^(https?|ssh|git|file)://\S+$' -or $u -match '^[\w.-]+@[\w.-]+:\S+$' -or $u -match '^[A-Za-z]:[\\/]' -or $u -match '^\\\\')
   if (-not $shape) { return 'That does not look like a repository address. Example: https://github.com/<you>/<repo>.git' }
-  if ($u -match '^\\\\\\\\' -or $u -match '^file://[^/]' -or $u -match '^//') { return 'Network-share addresses are not supported (opening them can leak your Windows login to that server). Use a GitHub address or a folder on this PC.' }
+  if ($u -match '^\\\\' -or $u -match '^file://[^/]' -or $u -match '^//') { return 'Network-share addresses are not supported (opening them can leak your Windows login to that server). Use a GitHub address or a folder on this PC.' }
   if (($u -match '^[a-z]+://[^/?#]*@' -and $u -notmatch '^ssh://git@') -or $u -match '[?#]') { return 'Do not put a user name, password or token inside the address (it would be stored in plain text), and leave out ? and # parts. Use the plain address and sign in to GitHub instead.' }
   if ($u -match '^https?://(www\.)?github\.com/([^/\s]+)/?$') { return 'That is a GitHub profile, not a repository. Use https://github.com/<you>/<repo>.git' }
   if ($u -match '^https?://(www\.)?github\.com/[^/\s]+/[^/\s]+/[^\s]+$') { return 'That is a page inside the repository (tree, issues, ...). Use the short address: https://github.com/<you>/<repo>.git' }
@@ -579,8 +585,12 @@ function Set-RemoteUrl([string]$Path, [string]$Url, [string]$Name = 'origin') {
   $repo = Get-RepoRoot $Path; $Url = "$Url".Trim()
   $pr = Get-RemoteUrlProblem $Url; if ($pr) { throw $pr }
   $has = Git-Out $repo @('remote', 'get-url', $Name)
+  $changed = (-not $has.Code) -and (($has.Out | Select-Object -First 1) -ne $Url)
   $r = if ($has.Code) { Git-Out $repo @('remote', 'add', $Name, $Url) } else { Git-Out $repo @('remote', 'set-url', $Name, $Url) }
   if ($r.Code) { throw "Could not set the remote: $($r.Out -join ' ')" }
+  if ($changed) {   # what we remembered about the OLD address must not make the project look in sync with the new one
+    foreach ($ref in (Git-Out $repo @('for-each-ref', '--format=%(refname)', "refs/remotes/$Name/")).Out) { if ($ref) { [void](Git-Out $repo @('update-ref', '-d', $ref)) } }
+  }
   "Remote '$Name' = $(Hide-Secrets $Url)"
 }
 
@@ -659,6 +669,7 @@ function Invoke-Publish([string]$Path, [hashtable]$NewCommit, [hashtable]$Edits,
   $log = New-Object Collections.Generic.List[string]
   if ($NewCommit -and $NewCommit.Date) { Assert-GitDate ([datetime]$NewCommit.Date) }                 # fail before anything is committed
   if ($NewCommit -and -not "$($NewCommit.Message)".Trim()) { throw 'Write a commit message first.' }
+  if ($Push -and -not (Get-PushState $Path).Url) { throw 'This project is not linked to GitHub yet, so nothing was saved or published. Paste your GitHub repository address first (command line: backdate remote <folder> <address>).' }   # checked BEFORE committing
   if ($Edits) { foreach ($k in @($Edits.Keys)) { $ed = $Edits[$k]; if ($ed.date) { Assert-GitDate ([datetime]$ed.date) }; if ($null -ne $ed.message -and -not "$($ed.message)".Trim()) { throw "Commit message for $k cannot be empty." } } }
   if ($NewCommit) {
     $a = @{ Path = $Path; Message = $NewCommit.Message }
@@ -794,4 +805,13 @@ function Publish-Express([string]$Path, [string]$Message, $Date, [string[]]$File
   $log.Add((Push-Repo $repo)); & $step $n $total 'Sent to GitHub' 'done'
   $n++; & $step $n $total 'Finished' 'done'
   @($log.ToArray())
+}
+
+# Leave specific files out of future commits (writes anchored entries to .gitignore). Returns the .gitignore path.
+function Add-GitignoreEntries([string]$Path, [string[]]$Entries) {
+  $repo = Get-RepoRoot $Path; $file = Join-Path $repo '.gitignore'
+  $have = if (Test-Path -LiteralPath $file) { @([IO.File]::ReadAllLines($file)) } else { @() }
+  $add = @($Entries | Where-Object { $_ } | ForEach-Object { '/' + ($_ -replace '\\', '/').TrimStart('/') } | Where-Object { $have -notcontains $_ } | Select-Object -Unique)
+  if ($add.Count) { [IO.File]::AppendAllText($file, $(if ($have.Count) { "`r`n" } else { '' }) + "# left out by backd8 (looks like it holds secrets)`r`n" + ($add -join "`r`n") + "`r`n", (New-Object Text.UTF8Encoding $false)) }
+  $file
 }

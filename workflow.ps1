@@ -151,11 +151,11 @@ $script:WfActions = [ordered]@{
   Blocked        = @( @{ Id = 'ShowFinishOperation'; Label = 'How to finish or abort it'; Kind = 'info'; Next = @('Blocked') }, @{ Id = 'Recheck'; Label = 'Check again'; Kind = 'nav'; Next = @('Blocked', 'ChangesPending', 'InSync', 'NoRemote', 'ReadyToPublish', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'Detached', 'EditsPending', 'EmptyProject') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
   Detached       = @( @{ Id = 'ShowSwitchBranch'; Label = 'How to switch to a branch'; Kind = 'info'; Next = @('Detached') }, @{ Id = 'Recheck'; Label = 'Check again'; Kind = 'nav'; Next = @('Detached', 'ChangesPending', 'InSync', 'NoRemote', 'ReadyToPublish', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'EditsPending', 'EmptyProject') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
   EmptyProject   = @( @{ Id = 'Recheck'; Label = 'I added files - check again'; Kind = 'nav'; Next = @('EmptyProject', 'ChangesPending') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
-  ChangesPending = @( @{ Id = 'Commit'; Label = 'Save these files as a commit'; Kind = 'engine'; Next = @('NoRemote', 'ReadyToPublish', 'InSync', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'ChangesPending', 'EditsPending', 'Blocked') }, @{ Id = 'AddGitignore'; Label = 'Leave out build and editor files'; Kind = 'engine'; Next = @('ChangesPending', 'NoRemote', 'ReadyToPublish', 'InSync') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
+  ChangesPending = @( @{ Id = 'Commit'; Label = 'Save these files as a commit'; Kind = 'engine'; Next = @('NoRemote', 'ReadyToPublish', 'InSync', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'ChangesPending', 'EditsPending', 'Blocked') }, @{ Id = 'AddGitignore'; Label = 'Leave out build and editor files'; Kind = 'engine'; Next = @('ChangesPending', 'NoRemote', 'ReadyToPublish', 'InSync') }, @{ Id = 'IgnoreRiskyFiles'; Label = 'Leave out the files that look like secrets'; Kind = 'engine'; Next = @('ChangesPending', 'NoRemote', 'ReadyToPublish', 'InSync', 'EmptyProject') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
   EditsPending   = @( @{ Id = 'ApplyEdits'; Label = 'Apply my edits'; Kind = 'engine'; Next = @('NoRemote', 'ReadyToPublish', 'NeedsReplace', 'InSync', 'GitHubAhead', 'NeedsSync', 'EditsPending') }, @{ Id = 'DiscardEdits'; Label = 'Discard my edits'; Kind = 'nav'; Next = @('NoRemote', 'ReadyToPublish', 'InSync', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'ChangesPending') } )
   NoRemote       = @( @{ Id = 'ConnectRemote'; Label = 'Connect'; Kind = 'engine'; Next = @('ReadyToPublish', 'InSync', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'NoRemote') }, @{ Id = 'OpenNewRepoPage'; Label = 'Open github.com/new'; Kind = 'nav'; Next = @('NoRemote') } )
   GitHubAhead    = @( @{ Id = 'Sync'; Label = 'Get the latest from GitHub'; Kind = 'engine'; Next = @('ReadyToPublish', 'InSync', 'GitHubAhead', 'NeedsReplace', 'NeedsSync', 'ChangesPending') } )
-  NeedsSync      = @( @{ Id = 'Sync'; Label = 'Get the latest from GitHub'; Kind = 'engine'; Next = @('ReadyToPublish', 'InSync', 'NeedsReplace', 'NeedsSync', 'GitHubAhead') }, @{ Id = 'Undo'; Label = 'Undo my last change'; Kind = 'engine'; Next = @('NeedsSync', 'GitHubAhead', 'ReadyToPublish', 'InSync') } )
+  NeedsSync      = @( @{ Id = 'Sync'; Label = 'Get the latest from GitHub'; Kind = 'engine'; Next = @('ReadyToPublish', 'InSync', 'NeedsReplace', 'NeedsSync', 'GitHubAhead') }, @{ Id = 'Undo'; Label = 'Undo my last change'; Kind = 'engine'; Next = @('NeedsSync', 'GitHubAhead', 'ReadyToPublish', 'InSync') }, @{ Id = 'Recheck'; Label = 'Check again'; Kind = 'nav'; Next = @('NeedsSync', 'GitHubAhead', 'ReadyToPublish', 'InSync', 'NeedsReplace', 'ChangesPending', 'EditsPending', 'Blocked') }, @{ Id = 'ChooseFolder'; Label = 'Choose another folder...'; Kind = 'nav'; Next = @('NoFolder') } )
   NeedsReplace   = @( @{ Id = 'ReplaceRemote'; Label = 'Replace GitHub''s version...'; Kind = 'engine'; Next = @('InSync', 'NeedsSignIn', 'ChooseAccount', 'NoWriteAccess', 'RepoNotFound', 'SSORequired', 'HostKeyProblem', 'Offline', 'NeedsSync', 'NeedsReplace', 'GitHubAhead') }, @{ Id = 'Undo'; Label = 'Undo my last change'; Kind = 'engine'; Next = @('GitHubAhead', 'ReadyToPublish', 'InSync', 'NeedsSync', 'NeedsReplace') }, @{ Id = 'Sync'; Label = 'Get the latest from GitHub'; Kind = 'engine'; Next = @('NeedsReplace', 'InSync', 'ReadyToPublish', 'NeedsSync') } )
   NeedsSignIn    = @( @{ Id = 'SignIn'; Label = 'Sign in to GitHub'; Kind = 'engine'; Next = @('ReadyToPublish', 'InSync', 'ChooseAccount', 'NoWriteAccess', 'RepoNotFound', 'SSORequired', 'HostKeyProblem', 'Offline', 'NeedsSignIn') }, @{ Id = 'ChangeAddress'; Label = 'Change the GitHub address'; Kind = 'engine'; Next = @('ReadyToPublish', 'NeedsSignIn', 'NoRemote', 'GitHubAhead', 'NeedsSync', 'NeedsReplace', 'InSync') } )
   ChooseAccount  = @( @{ Id = 'ChooseAccount'; Label = 'Use this account'; Kind = 'engine'; Next = @('ReadyToPublish', 'NeedsSignIn', 'NoWriteAccess', 'RepoNotFound', 'ChooseAccount', 'InSync') }, @{ Id = 'SignIn'; Label = 'Sign in with another account'; Kind = 'engine'; Next = @('ReadyToPublish', 'ChooseAccount', 'NeedsSignIn', 'NoWriteAccess', 'InSync') } )
@@ -179,8 +179,10 @@ function Get-ActionGuard([string]$id, $f, [hashtable]$p) {
       if (-not "$($p.Message)".Trim()) { return 'Write what you changed first.' }
       if (-not $p.All -and -not @($p.Files).Count) { return 'Tick at least one file.' }
       if ($p.Date) { try { Assert-GitDate ([datetime]$p.Date) } catch { return $_.Exception.Message } }
+      if ($f.RiskyFiles -gt 0 -and $p.All -and -not $p.AllowRisky) { return 'Some files look like they hold passwords or keys. Leave them out (recommended) or confirm that you want them saved.' }
     }
     'AddGitignore' { if (-not $f.NeedsIgnore) { return 'Nothing to leave out.' } }
+    'IgnoreRiskyFiles' { if ($f.RiskyFiles -lt 1) { return 'No file looks like it holds secrets.' } }
     'ApplyEdits' { if ($f.EditsStaged -lt 1 -or -not $p.Edits -or -not $p.Edits.Count) { return 'You have not changed any commit yet.' } }
     'ConnectRemote' { $pr = Get-RemoteUrlProblem $p.Url; if ($pr) { return $pr } }
     'ChangeAddress' { $pr = Get-RemoteUrlProblem $p.Url; if ($pr) { return $pr } }
@@ -209,16 +211,20 @@ function Get-WorkflowPlan([string]$Path, [hashtable]$Ui = @{}, [hashtable]$Param
   # the recommended action = the state's main forward action (first engine action, else the first action), shown even while its
   # guard still needs input - the UI then displays it disabled together with Why (e.g. 'Write what you changed first')
   $rec = ($acts | Where-Object { $_.Kind -eq 'engine' } | Select-Object -First 1); if (-not $rec) { $rec = $acts | Select-Object -First 1 }
+  if ($s -eq 'InSync') { $rec = $null }   # nothing to do: never push the user towards Undo or another folder
   [pscustomobject]@{ State = $s; Title = $script:WfStates[$s].Title; Help = $script:WfStates[$s].Help; Facts = $f; Actions = $acts; Recommended = $(if ($rec) { $rec.Id }); RecommendedEnabled = [bool]($rec -and $rec.Enabled); RecommendedWhy = $(if ($rec) { $rec.Why }) }
 }
 
 # ---------- errors: every engine failure maps to a class and a way forward ----------
 $script:WfErrorClasses = @(
   @{ Class = 'untrusted';  Rx = 'UNTRUSTED PROJECT';                              Headline = 'This project can run programs on your PC.';                          Recovery = 'Trust' }
-  @{ Class = 'signin';     Rx = 'GitHub sign-in required|not signed in';          Headline = 'GitHub needs you to sign in.';                                       Recovery = 'SignIn' }
+  @{ Class = 'signin';     Rx = 'GitHub sign-in required|not signed in|Authentication failed|Invalid username or password|password authentication was removed|could not read Username';          Headline = 'GitHub needs you to sign in.';                                       Recovery = 'SignIn' }
   @{ Class = 'behind';     Rx = 'newer change|both changed|nowhere in this repository|written by someone else'; Headline = 'GitHub has work that your project does not.'; Recovery = 'Sync' }
   @{ Class = 'conflict';   Rx = 'changed the same file|merge conflicts|unresolved'; Headline = 'GitHub and your project changed the same files.';                Recovery = 'Recheck' }
   @{ Class = 'locked';     Rx = 'locked by another program|index\.lock|Permission denied'; Headline = 'Another program is using these files.';                      Recovery = 'Recheck' }
+  @{ Class = 'protected';  Rx = 'protected branch|GH006|GH013';                   Headline = 'GitHub does not allow publishing straight to this branch.';          Recovery = 'Recheck' }
+  @{ Class = 'stale';      Rx = 'has no changes|already saved|nothing to commit|Nothing new'; Headline = 'That was already done.';                                    Recovery = 'Recheck' }
+  @{ Class = 'undo';       Rx = 'changed since the last rewrite|No backd8 backup|Undo would discard'; Headline = 'Undo is not possible any more.';                            Recovery = 'Recheck' }
   @{ Class = 'identity';   Rx = 'who you are|Type your name';                     Headline = 'Git needs your name and email.';                                     Recovery = 'SaveIdentity' }
   @{ Class = 'date';       Rx = 'too early|must be in the past|Invalid or missing date'; Headline = 'That date cannot be used.';                                     Recovery = 'Recheck' }
   @{ Class = 'message';    Rx = 'commit message|Write what you changed';          Headline = 'Write what you changed first.';                                      Recovery = 'Recheck' }
@@ -253,6 +259,7 @@ function Invoke-WorkflowAction([string]$Path, [string]$Id, [hashtable]$Params = 
       'SaveIdentity'  { Set-GitIdentity $p.Name $p.Email; 'Saved your name and email.' }
       'Commit'        { $a = @{ Path = $root; Message = $p.Message }; if ($p.All) { $a.All = $true } else { $a.Files = @($p.Files) }; if ($p.Date) { $a.Date = $p.Date }; if ($p.AllowRisky) { $a.AllowRisky = $true }; New-CommitFromChanges @a }
       'AddGitignore'  { Add-Gitignore $root $p.Kind }
+      'IgnoreRiskyFiles' { Add-GitignoreEntries $root @(Get-WorkingChanges $root | Where-Object Risky | ForEach-Object { $_.Path }) }
       'ApplyEdits'    { Set-CommitEdits $root $p.Edits }
       'ConnectRemote' { Set-RemoteUrl $root $p.Url }
       'ChangeAddress' { Set-RemoteUrl $root $p.Url }
