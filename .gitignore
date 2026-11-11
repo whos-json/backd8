@@ -1,0 +1,5 @@
+# local settings (contains absolute paths of your repos)
+config.json
+*.tmp
+# BackD8.exe is intentionally tracked (so the repo works without a build step)
+ui.json

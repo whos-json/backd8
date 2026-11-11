@@ -50,11 +50,11 @@ Check ((git -C $a rev-list --count HEAD) -eq '3' -and (git -C $a status --porcel
 
 "== Independent clocks / per-repo override / path-case normalisation"
 $b = NewRepo 'b'; Check ((Commit $b) -eq $start) 'new repo starts at default, unaffected by repo a'
-$c = NewRepo 'c Spaces Ã¼nÃ¯'; Bd set $c '2021-03-01T09:30:00' | Out-Null
+$c = NewRepo 'c Spaces üï'; Bd set $c '2021-03-01T09:30:00' | Out-Null
 Check ((Commit $c) -eq [datetime]'2021-03-01T09:30:00') 'per-repo override (path with spaces/unicode)'
 Bd set $c.ToUpper() '2020-01-01T08:00:00' | Out-Null
 Check (@((Cfg).repos | ? { $_.path -like '*spaces*' }).Count -eq 1) 'case-insensitive path = same entry (no duplicate)'
-Check ((Commit $c) -eq [datetime]'2020-01-01T08:00:00') 'resetting a repo date restarts its clock'
+$dc = Commit $c; Check ($dc -gt [datetime]'2021-03-01T09:30:00' -and ($dc - [datetime]'2021-03-01T09:30:00').TotalHours -le 6.1 -and (@((Cfg).repos) | ? { $_.path -like '*spaces*' }).start -like '2020-01-01*') 'resetting a repo date to before its last commit: clamped after parent, never goes backwards'
 
 "== Repo-local hooks still work (global hooksPath must not disable them)"
 $h = NewRepo 'hooks'
@@ -77,7 +77,7 @@ Check ($d -eq [datetime]'2020-02-02T10:00:00') 'manual env-var date respected (n
 Check (-not (@((Cfg).repos) | ? { $_.path -like '*manual' })) 'manual commit did not advance a clock'
 $before = (@((Cfg).repos) | ? { $_.path -like '*/a' }).next
 git -C $a commit -q --amend -m 'reworded'
-Check ((CDate $a) -eq $d3 -and (@((Cfg).repos) | ? { $_.path -like '*/a' }).next -eq $before) 'user amend of backdated commit: date kept, clock not advanced'
+Check (([datetimeoffset](git -C $a log -1 --format=%aI)).LocalDateTime -eq $d3 -and (@((Cfg).repos) | ? { $_.path -like '*/a' }).next -eq $before) 'user amend of backdated commit: author date kept, clock not advanced'
 git -C $a checkout -q -b feat; $df = Commit $a 'feat1'
 git -C $a checkout -q main; $dm = Commit $a 'main2'
 $nextBefore = (@((Cfg).repos) | ? { $_.path -like '*/a' }).next
@@ -98,6 +98,21 @@ $f1 = NewRepo 'future'; Bd set $f1 (Get-Date).AddMinutes(-30).ToString('s') | Ou
 $x1 = Commit $f1; $x2 = Commit $f1
 Check ($x1 -lt (Get-Date).AddMinutes(-20) -and ((Get-Date) - $x2).TotalMinutes -lt 5) 'stops backdating once clock passes now'
 
+"== Concurrency (config lock)"
+$cc = 1..6 | % { NewRepo "conc$_" }
+$procs = $cc | % { Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script:bdScript, 'set', "`"$_`"", '2018-01-01T08:00:00' }
+$procs | % { [void]$_.WaitForExit(60000) }
+Check (@((Cfg).repos | ? { $_.path -like '*/conc*' }).Count -eq 6) 'six parallel `set` calls all persisted (no lost updates)'
+Check (-not (Get-ChildItem (Split-Path $env:BACKDATE_CONFIG) -Filter '*.tmp')) 'no leftover .tmp files'
+$hp = $cc | % { $d = $_; Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList '-NoProfile', '-Command', "Set-Content '$d\x.txt' 1; git -C '$d' add -A; git -C '$d' commit -q -m par" }
+$hp | % { [void]$_.WaitForExit(90000) }
+Check (@($cc | ? { ([datetimeoffset](git -C $_ log -1 --format=%aI)).LocalDateTime -eq [datetime]'2018-01-01T08:00:00' }).Count -eq 6) 'six simultaneous commits in six repos all backdated, none blocked'
+Check (@((Cfg).repos | ? { $_.path -like '*/conc*' -and $_.next }).Count -eq 6) 'each repo clock advanced exactly once'
+
+"== Repo-local hooksPath warning"
+$lh = NewRepo 'localhooks'; Bd set $lh $s | Out-Null; git -C $lh config --local core.hooksPath .githooks
+Check ((Bd status) -match 'sets its own core.hooksPath') 'status warns about repos that override hooksPath'
+
 "== Robustness"
 Bd off | Out-Null; $r2 = NewRepo 'off2'; Check (((Get-Date) - (Commit $r2)).TotalMinutes -lt 5) 'OFF again -> real date'
 Bd on | Out-Null; Set-Content $env:BACKDATE_CONFIG '{ corrupt'
@@ -116,8 +131,11 @@ Check (([datetimeoffset](git -C $bash log -1 --format=%aI)).LocalDateTime -eq $s
 Bd uninstall | Out-Null
 
 "== GUI self-test + exe launch"
+Remove-Item $env:BACKDATE_CONFIG -ErrorAction SilentlyContinue; Bd uninstall | Out-Null   # known starting state
 $env:BACKD8_TEST_REPO = (NewRepo 'gui')
+$g2 = NewRepo 'gui2'; 1..4 | % { $null = Commit $g2 "g$_" }; $gb = "$T\gui2.git"; git init -q --bare $gb; git -C $g2 remote add origin $gb; $env:BACKD8_TEST_REPO2 = $g2   # editor self-test: several commits + local bare remote
 $o = powershell -NoProfile -ExecutionPolicy Bypass -STA -File "$proj\gui.ps1" -SelfTest 2>&1 | Out-String
+Check ($o -match 'selftest-editor-ok') 'GUI commit editor: load, stage, apply, push refused, force push, undo, sign-in routing'
 Check ($o -match 'selftest-ok rows=0') "GUI handlers: install, default, add repo, toggle ON/OFF, update, remove ($($o.Trim().Split("`n")[-1]))"
 Check (-not (git config --global core.hooksPath) -and ((Cfg).enabled -eq $false)) 'GUI end state: uninstalled, backdating OFF'
 $exe = Start-Process "$proj\BackD8.exe" -PassThru; $ok = $false

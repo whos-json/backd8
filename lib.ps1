@@ -1,36 +1,73 @@
 # backd8 core logic. Dot-sourced by backdate.ps1 (CLI + git hook) and gui.ps1.
 # Env overrides (used by tests): BACKDATE_CONFIG = config.json path.
 
+# git emits UTF-8; decoding it with the OEM codepage corrupts non-ASCII paths (hooksPath, repo keys)
+try { [Console]::OutputEncoding = $OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
+
 $script:Root = $PSScriptRoot
+. "$PSScriptRoot\repo.ps1"
+. "$PSScriptRoot\github.ps1"
+. "$PSScriptRoot\workflow.ps1"
 $script:HookNames = 'applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-auto-gc post-rewrite'.Split(' ')
 
 function Norm([string]$p) { ($p -replace '\\', '/').TrimEnd('/').ToLowerInvariant() }
 function Get-CfgPath { if ($env:BACKDATE_CONFIG) { $env:BACKDATE_CONFIG } else { Join-Path $script:Root 'config.json' } }
 function Get-HooksDir { Join-Path $script:Root 'hooks' }
 function Iso([datetime]$d) { $d.ToString('s', [Globalization.CultureInfo]::InvariantCulture) }
+function Parse-Date([string]$s) {
+  $d = [datetime]::MinValue
+  if ($s -match '^\s*\d{1,2}/\d{1,2}/\d{2,4}') { throw "Ambiguous date '$s' (day/month or month/day?). Use yyyy-MM-dd, e.g. 2024-03-01." }
+  if ($s -match '^\s*(\d{4})-' -and [int]$Matches[1] -lt 1971) { throw "Date '$s' is too early for git. Use 1971 or later." }
+  if (-not $s -or -not [datetime]::TryParse($s, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$d)) { throw "Invalid or missing date '$s'. Use e.g. 2024-03-01 or 2024-03-01T14:30:00." }
+  if ($d -lt [datetime]'1971-01-01') { throw "Date '$s' is too early for git. Use 1971 or later." }
+  $d
+}
 
 function Get-Config {
   $p = Get-CfgPath
-  if (-not (Test-Path $p)) { return [pscustomobject]@{ enabled = $false; default = [pscustomobject]@{ start = $null }; repos = @() } }
-  $c = Get-Content $p -Raw | ConvertFrom-Json
+  if (-not (Test-Path $p)) { return [pscustomobject]@{ enabled = $false; default = [pscustomobject]@{ start = $null }; repos = @(); trusted = @() } }
+  try { $c = Get-Content $p -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+  catch { throw "backd8's settings file is damaged or locked: $p  (use Advanced > Reset settings, or delete that file).  Details: $($_.Exception.Message)" }
+  if ($null -eq $c -or $c -isnot [pscustomobject]) { return [pscustomobject]@{ enabled = $false; default = [pscustomobject]@{ start = $null }; repos = @(); trusted = @() } }
+  if ($null -eq $c.PSObject.Properties['enabled']) { $c | Add-Member enabled $false }
+  if ($null -eq $c.PSObject.Properties['repos']) { $c | Add-Member repos @() }
   if ($null -eq $c.default) { $c | Add-Member default ([pscustomobject]@{ start = $null }) }
   $c.repos = @($c.repos)
+  if ($null -eq $c.PSObject.Properties['trusted']) { $c | Add-Member trusted @() }
+  $c.trusted = @($c.trusted)
   $c
 }
 
 function Save-Config($c) {
-  $p = Get-CfgPath; $tmp = "$p.tmp"
-  ConvertTo-Json -InputObject $c -Depth 5 | Set-Content $tmp -Encoding utf8
-  Move-Item $tmp $p -Force   # atomic replace: a crash never leaves a half-written config
+  $p = Get-CfgPath; $tmp = "$p.$PID.tmp"
+  ConvertTo-Json -InputObject $c -Depth 5 | Set-Content $tmp -Encoding utf8 -ErrorAction Stop
+  Move-Item $tmp $p -Force -ErrorAction Stop   # atomic replace: a crash never leaves a half-written config
+}
+
+# Serialises read-modify-write of config.json across processes (several commits/CLI calls/GUI at once would lose updates).
+function Use-ConfigLock([scriptblock]$Body) {
+  $md5 = [Security.Cryptography.MD5]::Create()
+  $name = 'backd8-cfg-' + ([BitConverter]::ToString($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-CfgPath).ToLowerInvariant()))) -replace '-', '')
+  $m = New-Object Threading.Mutex($false, $name); $held = $false
+  try {
+    try { $held = $m.WaitOne(20000) } catch [Threading.AbandonedMutexException] { $held = $true }
+    if (-not $held) { throw 'Timed out waiting for another backd8 process that is updating the config.' }
+    & $Body
+  } finally { if ($held) { $m.ReleaseMutex() }; $m.Dispose(); $md5.Dispose() }
 }
 
 function Find-Repo($c, [string]$key) { @($c.repos) | Where-Object { (Norm $_.path) -eq $key } | Select-Object -First 1 }
 
 # ---------- install / uninstall ----------
-function Get-HooksPath { (git config --global core.hooksPath) }
+function Get-HooksPath { if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $null }; (git config --global core.hooksPath) }
+# Moves a damaged settings file aside (keeps it as config.json.bad-<time>) so backd8 can start fresh.
+function Reset-Config { $p = Get-CfgPath; if (Test-Path -LiteralPath $p) { Move-Item -LiteralPath $p "$p.bad-$((Get-Date).ToString('yyyyMMdd-HHmmss'))" -Force }; "Settings reset (old file kept as $p.bad-...)." }
 function Test-IsOurs([string]$p) {
   $n = Norm $p
-  $n -eq (Norm (Get-HooksDir)) -or $n -like '*/.git-backdate/hooks'   # legacy location from the first prototype
+  if ($n -eq (Norm (Get-HooksDir)) -or $n -like '*/.git-backdate/hooks') { return $true }   # this copy, or the legacy prototype location
+  # another copy of backd8 (moved or renamed folder): recognised by its generated shims, or because the folder is gone
+  if ($n -like '*/hooks') { $pc = Join-Path $p 'post-commit'; if (-not (Test-Path -LiteralPath $p)) { return $true }; if ((Test-Path -LiteralPath $pc) -and ((Get-Content -LiteralPath $pc -TotalCount 3 -ErrorAction SilentlyContinue) -join ' ') -match 'generated by backd8') { return $true } }
+  $false
 }
 
 function Install-Hooks([switch]$Force) {
@@ -44,7 +81,7 @@ function Install-Hooks([switch]$Force) {
   $chain = 'h="$(git rev-parse --git-common-dir)/hooks/$(basename "$0")"' + "`n" + '[ -f "$h" ] && exec "$h" "$@"' + "`nexit 0`n"
   foreach ($n in $script:HookNames) {
     $body = "#!/bin/sh`n# generated by backd8 install; repo-local hooks are forwarded to, because a global hooksPath would otherwise disable them`n"
-    if ($n -eq 'post-commit') { $body += $find + "`n" + 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$d/backdate.ps1" hook' + "`n" }
+    if ($n -eq 'post-commit') { $body += $find + "`n" + 'if [ -f "$d/backdate.ps1" ] && grep -Eq ''"enabled":[[:space:]]*true'' "${BACKDATE_CONFIG:-$d/config.json}" 2>/dev/null; then powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$d/backdate.ps1" hook; fi' + "`n" }
     [IO.File]::WriteAllText((Join-Path $dir $n), $body + $chain, $utf8)   # LF endings: CRLF breaks sh shebangs
   }
   if (-not (Test-Path (Get-CfgPath))) { Save-Config (Get-Config) }
@@ -57,46 +94,71 @@ function Uninstall-Hooks {
   if (-not $cur) { return 'Nothing to uninstall (core.hooksPath not set).' }
   if (-not (Test-IsOurs $cur)) { throw "core.hooksPath points to '$cur', which is not backd8's. Left untouched." }
   git config --global --unset core.hooksPath
+  try { Use-ConfigLock { $c = Get-Config; if ($c.enabled) { $c.enabled = $false; Save-Config $c } } } catch {}   # reinstalling later must not silently resume backdating
   'Uninstalled.'
 }
 
 function Get-Status {
   $c = Get-Config; $cur = Get-HooksPath
-  [pscustomobject]@{ Installed = [bool]($cur -and (Test-IsOurs $cur)); HooksPath = $cur; Enabled = [bool]$c.enabled; Config = $c }
+  [pscustomobject]@{ Installed = [bool]($cur -and (Test-IsOurs $cur)); HooksPath = $cur; Enabled = [bool]$c.enabled; Config = $c; HooksFolderMissing = [bool]($cur -and (Test-IsOurs $cur) -and -not (Test-Path -LiteralPath $cur)); OtherCopy = [bool]($cur -and (Test-IsOurs $cur) -and (Norm $cur) -ne (Norm (Get-HooksDir))) }
 }
 
 # ---------- config edits ----------
 function Set-Enabled([bool]$on) {
-  $c = Get-Config
-  if ($on -and -not $c.default.start -and -not (@($c.repos) | Where-Object { $_.start })) { throw 'Set a start date first (default or for a repo).' }
-  $c.enabled = $on; Save-Config $c
+  Use-ConfigLock {
+    $c = Get-Config
+    if ($on -and -not $c.default.start -and -not (@($c.repos) | Where-Object { $_.start })) { throw 'Set a start date first (default or for a repo).' }
+    $c.enabled = $on; Save-Config $c
+  }
 }
 
 function Set-StartDate([string]$Path, [datetime]$Start) {
   if ($Start -gt (Get-Date)) { throw 'Start date must be in the past.' }
-  $c = Get-Config
-  if ($Path -eq '*') { $c.default.start = Iso $Start; Save-Config $c; return }
-  if (-not (Test-Path -LiteralPath $Path)) { throw "Folder not found: $Path" }
-  $key = Norm (Resolve-Path -LiteralPath $Path).Path
-  $e = Find-Repo $c $key
-  if ($e) { $e.start = Iso $Start; $e.next = $null }
-  else { $c.repos = @($c.repos) + [pscustomobject]@{ path = $key; start = (Iso $Start); next = $null } }
-  Save-Config $c
+  if ($Path -ne '*' -and -not (Test-Path -LiteralPath $Path -PathType Container)) { throw "Folder not found: $Path" }
+  Use-ConfigLock {
+    $c = Get-Config
+    if ($Path -eq '*') { $c.default.start = Iso $Start; Save-Config $c; return }
+    $key = Norm (Resolve-Path -LiteralPath $Path).Path
+    $e = Find-Repo $c $key
+    if ($e) { $e.start = Iso $Start; $e.next = $null }
+    else { $c.repos = @($c.repos) + [pscustomobject]@{ path = $key; start = (Iso $Start); next = $null } }
+    Save-Config $c
+  }
 }
 
 function Remove-Repo([string]$Path) {
-  $c = Get-Config; $key = Norm $Path
-  $c.repos = @(@($c.repos) | Where-Object { (Norm $_.path) -ne $key })
-  Save-Config $c
+  if (-not $Path) { throw 'Usage: remove <repo-folder>' }
+  if (Test-Path -LiteralPath $Path) { $Path = (Resolve-Path -LiteralPath $Path).Path }
+  Use-ConfigLock {
+    $c = Get-Config; $key = Norm $Path
+    if (-not (Find-Repo $c $key)) { throw "Not in the list: $Path (see: backdate.cmd list)" }
+    $c.repos = @(@($c.repos) | Where-Object { (Norm $_.path) -ne $key })
+    Save-Config $c
+  }
+}
+
+# Repos whose own core.hooksPath overrides the global one: the backdate hook never runs there.
+function Get-HookOverrides {
+  foreach ($r in @((Get-Config).repos)) {
+    if (-not (Test-Path -LiteralPath $r.path -PathType Container)) { continue }
+    $v = git -C $r.path config --local core.hooksPath 2>$null
+    if ($v) { [pscustomobject]@{ Path = $r.path; HooksPath = $v } }
+  }
 }
 
 # ---------- the post-commit hook ----------
 function Invoke-Hook {
+  if ($env:BACKDATE_RUNNING) { return }                 # must be checked before locking: the amend's own hook would wait on our lock
+  Use-ConfigLock { Invoke-HookCore }
+}
+function Invoke-HookCore {
   if ($env:BACKDATE_RUNNING) { return }                 # our own amend re-triggers post-commit
   try { $c = Get-Config } catch { Write-Host 'backdate: config unreadable, commit left as-is'; return }
   if (-not $c.enabled) { return }
   $g = git rev-parse --absolute-git-dir 2>$null; if ($LASTEXITCODE) { return }
   foreach ($f in 'rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD') { if (Test-Path (Join-Path $g $f)) { return } }
+  git diff --cached --quiet 2>$null
+  if ($LASTEXITCODE -eq 1) { Write-Host 'backdate: other changes are still staged (partial commit), commit left as-is'; return }   # amending would swallow them
   $parents = (git rev-list --parents -n1 HEAD) -split ' '
   if ($parents.Count -gt 2) { return }                  # merge commits keep their real date
   $root = git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE) { return }
@@ -106,7 +168,9 @@ function Invoke-Hook {
   if (-not $e) {
     if (-not $c.default.start) { return }
     $e = [pscustomobject]@{ path = $key; start = $c.default.start; next = $null }   # each repo gets its own clock
-    $c.repos = @($c.repos) + $e
+    $c.repos = @($c.repos)
+  if ($null -eq $c.PSObject.Properties['trusted']) { $c | Add-Member trusted @() }
+  $c.trusted = @($c.trusted) + $e
   }
   if (-not $e.start) { return }
 
@@ -115,17 +179,15 @@ function Invoke-Hook {
     if (([datetimeoffset](git log -1 "--format=$fmt")).LocalDateTime -lt $now.AddDays(-1)) { return }
   }
   $when = if ($e.next) { [datetime]$e.next } else { [datetime]$e.start }
-  if ($when -gt $now) { return }                        # caught up with real time: stop backdating
-
-  if ($parents.Count -eq 2) {
-    $pd = ([datetimeoffset](git log -1 --format=%cI HEAD~1)).LocalDateTime
-    if ($when -lt $pd) { Write-Host "backdate: warning - dated before its parent commit ($(Iso $pd))" }
+  if ($parents.Count -eq 2) {                           # never date a commit before its parent
+    $pd = ([datetimeoffset](git log -1 --format=%aI HEAD~1)).LocalDateTime   # author date: a plain amend resets the committer date to now
+    if ($pd -lt $now.AddDays(-1) -and $when -le $pd) { $when = $pd.AddMinutes((Get-Random -Minimum 60 -Maximum 361)) }   # a real-dated parent (made while OFF) must not stall the clock
   }
+  if ($when -gt $now) { return }                        # caught up with real time: stop backdating
   $iso = Iso $when
   $env:BACKDATE_RUNNING = '1'; $env:GIT_COMMITTER_DATE = $iso
   git commit --amend --no-edit --no-verify --allow-empty --date=$iso -q
   if ($LASTEXITCODE) { Write-Host 'backdate: amend failed, commit left as-is'; return }
   $e.next = Iso $when.AddMinutes((Get-Random -Minimum 60 -Maximum 361))
   Save-Config $c
-  Write-Host "backdate: commit dated $iso"
 }

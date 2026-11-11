@@ -1,0 +1,13 @@
+* text=auto
+
+# Hook shims are shell scripts: keep LF (strict shells reject CRLF in the shebang line; it also keeps diffs clean).
+hooks/* text eol=lf
+
+# PowerShell 5.1 and the C# compiler are happy with CRLF on Windows.
+# Files with non-ASCII text keep their UTF-8 BOM (tests/*.ps1); Git does not strip it.
+*.ps1 text eol=crlf
+*.cs  text eol=crlf
+*.md  text
+
+BackD8.exe binary
+*.cmd text eol=crlf
